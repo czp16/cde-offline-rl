@@ -308,7 +308,7 @@ class CDELearner:
                     
                     if self.policy_extract_mode == "weighted_BC":
                         log_p, _ = self.policy.log_prob(dist, b.act)
-                        policy_loss = - (w_e * log_p).mean()
+                        policy_loss = - (w_e.detach() * log_p).mean()
                     
                     elif self.policy_extract_mode == 'info_proj':
                         # `_adv_sa` is different from `adv_sa`, it's based on sampled actions

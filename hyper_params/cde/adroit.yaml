@@ -11,7 +11,7 @@ learner:
     writer_dir: "exp/log"
     model_dir: "exp/model"
 
-    policy_extract_mode: 'info_proj' # ['info_proj', 'weighted_BC'], use 'weighted_BC' for adroit-human
+    policy_extract_mode: 'weighted_BC' # ['info_proj', 'weighted_BC'], 'weighted_BC' for adroit-human, 'info_proj' for adroit-expert
     e_value_type: "adv" # ["q", "adv"]
     e_value_loss_mode: 'mse' # ["mse", "minimax"]
     IS_ratio_normalize: true
@@ -23,7 +23,7 @@ network:
     policy_hidden_dim: [256, 256]
     dataset_policy_hidden_dim: [256, 256]
     dp_mixture_n_comp: 3
-    use_tanh_squash: true # use false for adroit-human
+    use_tanh_squash: false # false for adroit-human, true for adroit-expert
 
     # v_network: Critic
     v_net_hidden_dim: [256, 256]
