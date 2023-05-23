@@ -1,0 +1,14 @@
+name: cde
+dependencies:
+- python=3.8
+- pip
+- pip:
+  - numpy
+  - tqdm
+  - pyyaml
+  - argparse
+  - patchelf # for mujoco_py
+  - gym==0.19.0
+  - mujoco_py<2.2,>=2.1
+  - tensorboard>=2.7.0
+  - six # for importing mujoco tasks in d4rl

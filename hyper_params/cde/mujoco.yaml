@@ -1,0 +1,61 @@
+learner:
+    gamma: 0.99
+
+    epoch: 200
+    warmup_epoch: 40 #start training policy after warmup
+    batch_size: 512
+    n_step_per_episode: 1000
+
+    eval_episode: 20
+
+    writer_dir: "exp/log"
+    model_dir: "exp/model"
+
+    policy_extract_mode: 'info_proj' # ['info_proj', 'weighted_BC']
+    e_value_type: "adv" # ["q", "adv"]
+    e_value_loss_mode: 'mse' # ["mse", "minimax"]
+    IS_ratio_normalize: true
+    policy_entropy_reg: true
+    data_policy_entropy_reg: false
+    target_entropy: null
+
+network:
+    policy_hidden_dim: [256, 256]
+    dataset_policy_hidden_dim: [256, 256]
+    dp_mixture_n_comp: 3
+    use_tanh_squash: true
+
+    # v_network: Critic
+    v_net_hidden_dim: [256, 256]
+    v_net_l2_regularize: 0.0
+    # e_network: Critic
+    e_net_hidden_dim: [256, 256]
+    e_net_l2_regularize: 0.0
+
+    network_lr: 0.0003
+
+env:
+    name: "hopper-medium-v2"
+    
+
+preprocess:
+    normalize_obs: true
+    normalize_rew: true 
+    rew_scale: 0.1
+    traj_weight_temp: 0.1
+
+DICE:
+    alpha_f_div: 0.01
+    calibrate_dist_v: false
+    calibrate_dist_policy: false
+    merge_timeout_to_terminal: false
+
+    num_repeat_actions: 5
+    zeta_mix_dist: 0.9
+    ood_eps: 0.3
+    mix_data_policy: false
+
+misc:
+    seed: 100
+    cudaid: -1
+    dataset_ratio: 1.0
