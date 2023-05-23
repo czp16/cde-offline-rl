@@ -35,7 +35,7 @@ class Config:
 def to_tensor(x):
     if isinstance(x, torch.Tensor):
         return x.to(device=Config.DEVICE)
-    x = np.asarray(x, dtype=np.float)
+    x = np.asarray(x, dtype=float)
     x = torch.tensor(x, device=Config.DEVICE, dtype=torch.float32)
     return x
 

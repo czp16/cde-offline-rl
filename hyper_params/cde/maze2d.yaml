@@ -45,7 +45,7 @@ preprocess:
     traj_weight_temp: null
 
 DICE:
-    alpha_f_div: 0.01 # 0.001 for maze2d-large
+    alpha_f_div: 0.001 # 0.01 for maze2d-large
     calibrate_dist_v: false
     calibrate_dist_policy: false
     merge_timeout_to_terminal: false

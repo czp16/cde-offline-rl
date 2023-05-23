@@ -23,7 +23,8 @@ This project provides the open source implementation of the CDE in the paper: "L
     ```
 3) Create conda env:
     ```shell
-    conda env create -f environment.yml
+    cd cde-offline-rl
+    conda env create -f environment.yaml
     conda activate cde
     ```
 4) Install PyTorch according to your platform and cuda version.

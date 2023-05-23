@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from utils import to_tensor
+from utils.misc import to_tensor
 
 MEAN_MIN = -7.24 # atanh(-0.999999)
 MEAN_MAX = 7.24 # atanh(0.999999)
