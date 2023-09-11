@@ -1,6 +1,8 @@
 exp/
+wandb/
+log_data/
 baselines/
-tmp.py
+tmp.*
 *.ipynb
 run_experiment.py
 

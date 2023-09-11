@@ -12,17 +12,19 @@ class Config:
         self.hyperparams = {}
 
     def load_hyperparams(self):
-        args = self.parser.parse_args()
+        self.args = self.parser.parse_args()
         
-        assert hasattr(args, 'hyperparams'), 'The file of hyperparameters is not loaded.'
-        with open(args.hyperparams, 'r') as f:
+        assert hasattr(self.args, 'hyperparams'), 'The file of hyperparameters is not loaded.'
+        with open(self.args.hyperparams, 'r') as f:
             self.hyperparams = yaml.safe_load(f)
 
-        for key, value in args.__dict__.items():
+        for key, value in self.args.__dict__.items():
             if key == 'env_name' and value:
-                self.hyperparams['env']['name'] = args.__dict__['env_name']
-            else:
-                self.hyperparams['misc'][key] = args.__dict__[key]
+                self.hyperparams['env']['name'] = self.args.__dict__['env_name']
+            elif key in self.hyperparams['misc']:
+                self.hyperparams['misc'][key] = self.args.__dict__[key]
+            elif key in self.hyperparams['DICE']:
+                self.hyperparams['DICE'][key] = self.args.__dict__[key]
 
     def select_device(self):
         cudaid = self.hyperparams['misc']['cudaid']

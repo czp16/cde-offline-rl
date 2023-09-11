@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.distributions as D
 import numpy as np
 from tqdm import tqdm
+import wandb
 
 from utils import TanhNormalPolicy, to_tensor, to_numpy
 
@@ -24,7 +25,7 @@ def get_f_div_fn(f_name):
     
     elif f_name == 'softchi':
         f_fn = lambda x: torch.where(x<1, x*(torch.log(x+1e-10)-1)+1, 0.5*(x-1)**2)
-        f_prime_fn_np = lambda x: np.where(x<0, np.log(x), x+1)
+        f_prime_fn_np = lambda x: np.where(x<1, np.log(x), x-1)
         f_prime_inv_fn = lambda x: torch.where(x<0, torch.exp(torch.clamp_max(x,0)), x+1)
         r_fn = lambda x: torch.where(x<0, torch.exp(torch.clamp_max(x,0)), x+1)
         g_fn = lambda x: torch.where(x<0, (torch.clamp_max(x,0)-1)*torch.exp(torch.clamp_max(x,0))+1, 0.5*x**2)
@@ -80,7 +81,7 @@ class CDELearner:
             normalize_obs=True,
             normalize_rew=True,
             rew_scale=1.0,
-            logger=None,
+            # logger=None,
             eval_policy_fn=None,
         ):
 
@@ -133,7 +134,7 @@ class CDELearner:
         self.normalize_obs = normalize_obs
         self.normalize_rew = normalize_rew
         self.rew_scale = rew_scale
-        self.logger = logger
+        # self.logger = logger
         self.eval_policy_fn = eval_policy_fn
 
         # self.is_tanh_policy = isinstance(self.policy, TanhNormalPolicy)
@@ -223,7 +224,11 @@ class CDELearner:
                 if self.e_value_loss_mode == "mse":
                     e_loss = F.mse_loss(adv_e, adv_sa.detach())
                     if 0.0 < self.zeta_mix_dist < 1.0:
-                        e_ood = self.get_ood_e(b)
+                        ood_act = torch.empty(
+                            (self.num_repeat_actions, *b.act.shape), device=self.device
+                        ).uniform_(-1.0, 1.0)
+
+                        e_ood = self.get_ood_e(b, ood_act)
                         if self.e_value_type == "adv":
                             adv_ood = e_ood
                         elif self.e_value_type == "q":
@@ -247,7 +252,8 @@ class CDELearner:
                 
                 
                 if self.IS_ratio_normalize:
-                    lambda_e_loss = w_e.detach()*(adv_sa.detach()-self._lambda_e) + self._lambda_e
+                    w_ood = self.r_fn((adv_ood - self._lambda_e)/ self._alpha).detach().mean()
+                    lambda_e_loss = -(self.zeta_mix_dist * w_e.detach().mean() + (1-self.zeta_mix_dist) * w_ood)*self._lambda_e + self._lambda_e
                     lambda_e_loss = lambda_e_loss.mean()
 
                 self.e_optim.zero_grad()
@@ -265,11 +271,8 @@ class CDELearner:
                     dp_dist, _y, _x = self.data_policy(b.obs)
                     dp_log_p, _ = self.data_policy.log_prob(dp_dist, b.act)
 
-                    if self.mix_data_policy:
-                        random_act = torch.empty(
-                            (self.num_repeat_actions, *b.act.shape), device=self.device
-                        ).uniform_(-1.0, 1.0)
-                        dp_ood_log_p, _ = self.data_policy.log_prob(dp_dist, random_act)
+                    if self.mix_data_policy and (0.0 < self.zeta_mix_dist < 1.0):
+                        dp_ood_log_p, _ = self.data_policy.log_prob(dp_dist, ood_act)
                         assert dp_ood_log_p.shape == (self.num_repeat_actions, batch_size, 1)
                         dp_ood_log_p = dp_ood_log_p.mean(0)
                         data_policy_loss = self.zeta_mix_dist * dp_log_p + (1 - self.zeta_mix_dist) * dp_ood_log_p
@@ -325,7 +328,10 @@ class CDELearner:
                         _, _log_px = self.policy.log_prob(dist, _act, _pretanh_act)
                         _, _data_log_px = self.data_policy.log_prob(data_dist, _act, _pretanh_act)
                         
-                        kl = _log_px - _data_log_px
+                        if not self.mix_data_policy:
+                            kl = _log_px - self.zeta_mix_dist * _data_log_px # here we need zeta on \pi_data to approximate \hat{\pi}_data
+                        else:
+                            kl = _log_px - _data_log_px
                         # kl = D.kl_divergence(dist, data_dist)
 
                         policy_loss = - (_log_we - kl)
@@ -393,36 +399,35 @@ class CDELearner:
                 loss_dict['loss/policy_entropy'] = np.mean(policy_entropy_list)
 
             if episode >= warmup_episodes and self.eval_policy_fn:
-                norm_rew, norm_std = self.eval_policy_fn()
-                loss_dict['eval/reward'] = norm_rew
-                loss_dict['eval/reward_std'] = norm_std
+                eval_dict = self.eval_policy_fn()
+                loss_dict.update(**eval_dict)
 
-            if self.logger:
-                for k,v in loss_dict.items():
-                    self.logger.add_scalar(k, v, global_step=episode)
+            if episode >= 20:
+                _obs = batch.obs[:1000]
+                _act = batch.act[:1000]
+                v_obs = to_numpy(self.v_network(_obs).squeeze())
+                e_obs_act = to_numpy(self.e_network(_obs, _act).squeeze())
+                
+                import matplotlib.pyplot as plt
+                plt.figure(figsize=(8,4))
+                plt.subplot(1,2,1)
+                plt.plot(np.arange(1000), v_obs)
+                plt.subplot(1,2,2)
+                plt.plot(np.arange(1000), e_obs_act)
+                plt.savefig('tmp.png')
+
+            wandb.log(loss_dict, step=episode)
             
-            postfix_dict = {}
-            # postfix_dict['Df'] =  f'{np.mean(Df_list):.3}'
-            
-        
-        return norm_rew, norm_std
-    
-
-
-    def get_ood_e(self, batch):
+    def get_ood_e(self, batch, ood_act):
         bs = len(batch)
-        
-        random_actions = torch.empty(
-            (bs * self.num_repeat_actions, batch.act.shape[-1]),
-            device=self.device
-        ).uniform_(-1.0, 1.0)
+        # ood_act : [num_repeat_actions, bs, a_dim]
 
-        repeat_size = [1, self.num_repeat_actions, 1]
+        repeat_size = [self.num_repeat_actions, 1, 1]
         view_size = [bs * self.num_repeat_actions, batch.obs.shape[-1]]
-        tmp_obs = batch.obs.unsqueeze(1).repeat(*repeat_size).view(*view_size)
+        tmp_obs = batch.obs.unsqueeze(0).repeat(*repeat_size).view(*view_size)
 
-        e_ood = self.e_network(tmp_obs, random_actions)
-        e_ood = e_ood.reshape(bs, self.num_repeat_actions, 1)
+        e_ood = self.e_network(tmp_obs, ood_act.view(bs * self.num_repeat_actions, -1))
+        e_ood = e_ood.reshape(self.num_repeat_actions, bs, 1)
 
         return e_ood
 

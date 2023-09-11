@@ -1,5 +1,6 @@
 import numpy as np
 import time, os
+import wandb
 import torch
 import torch.distributions as D
 import gym
@@ -10,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from cde import CDELearner
 from utils import Batch, Critic, NormalPolicy, MixtureNormalPolicy, \
     TanhNormalPolicy, TanhMixtureNormalPolicy, dice_dataset, \
-    to_tensor, to_numpy, set_seed, Config
+    to_tensor, to_numpy, set_seed, Config, get_mujoco_ret_thres
 
 def get_args(parser):
     parser.add_argument('--seed', type=int, default=100)
@@ -18,6 +19,11 @@ def get_args(parser):
     parser.add_argument('--dataset_ratio', type=float, default=1.0)
     parser.add_argument('--hyperparams', type=str)
     parser.add_argument('--cudaid', type=int, default=-1)
+    parser.add_argument('--alpha_f_div', type=float, default=0.01)
+    parser.add_argument('--num_repeat_actions', type=int, default=5)
+    parser.add_argument('--zeta_mix_dist', type=float, default=0.9)
+    parser.add_argument('--ood_eps', type=float, default=0.3)
+    parser.add_argument('--log_path_info', type=str, default='')
 
 
 
@@ -30,8 +36,6 @@ def main():
     HP = cfg.hyperparams
 
     env = gym.make(HP['env']['name'])
-    s_dim = np.prod(env.observation_space.shape) or env.observation_space.n
-    a_dim = np.prod(env.action_space.shape) or env.action_space.n
 
     eval_env = env
     
@@ -43,7 +47,8 @@ def main():
     dataset_dict = dice_dataset(
         HP['env']['name'], 
         HP['misc']['dataset_ratio'], 
-        traj_weight_temp=HP['preprocess']['traj_weight_temp']
+        traj_weight_temp=HP['preprocess']['traj_weight_temp'],
+        # use_sparse_rew=HP['misc']['use_sparse_r'],
     )
     data_batch = Batch(**dataset_dict)
 
@@ -56,6 +61,8 @@ def main():
     else:
         obs_mean, obs_std = 0, 1
 
+    s_dim = data_batch.obs.shape[-1]
+    a_dim = data_batch.act.shape[-1]
 
     # Create network
     nn_lr = HP['network']['network_lr']
@@ -81,11 +88,33 @@ def main():
     e_net = Critic(s_dim, a_dim, HP['network']['e_net_hidden_dim']).to(Config.DEVICE)
     e_optim = torch.optim.Adam(e_net.parameters(), lr=nn_lr, weight_decay=HP['network']['e_net_l2_regularize'])
 
+    wandb.init(
+        project="CDE_ablation",
+        entity="czp16",
+        name=f"{HP['env']['name']}",
+        config={
+            "env_name": HP['env']['name'],
+            "seed": HP['misc']['seed'],
+            "dataset_ratio": HP['misc']['dataset_ratio'],
+            "alpha_f_div": HP['DICE']['alpha_f_div'],
+            "traj_weight": HP['preprocess']['traj_weight_temp'] if HP['preprocess']['traj_weight_temp'] is not None else -1,
+            "mix_data_policy": HP['DICE']['mix_data_policy'],
+            "tanh_squash": HP['network']['use_tanh_squash'],
+            "zeta": HP['DICE']['zeta_mix_dist'],
+            "ood_eps": HP['DICE']['ood_eps'],
+            "numood": HP['DICE']['mix_data_policy'],
+        }
+    )
+
     # Create logger to log the training data
     log_dir = os.path.join(HP['learner']['writer_dir'], f"{HP['env']['name']}/")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir, 0o777)
-    logger = SummaryWriter(os.path.join(log_dir, f"cde_seed{HP['misc']['seed']}_{HP['misc']['dataset_ratio']}_{time.strftime('%d-%m-%Y_%H-%M-%S')}"))
+    # if cfg.args.log_path_info == '':
+    #     log_path = f"cde_seed{HP['misc']['seed']}_{HP['misc']['dataset_ratio']}_{time.strftime('%d-%m-%Y_%H-%M-%S')}"
+    # else:
+    #     log_path = f"cde_{cfg.args.log_path_info}_seed{HP['misc']['seed']}_{time.strftime('%d-%m-%Y_%H-%M-%S')}"
+    # logger = SummaryWriter(os.path.join(log_dir, log_path))
     
     # evaluation function
     def eval_policy_fn():
@@ -104,12 +133,26 @@ def main():
                 total_reward += reward
                 i += 1
             reward_list.append(total_reward)
-        
+
+        reward_list = np.array(reward_list)
+
         reward_mean, reward_std = np.mean(reward_list), np.std(reward_list)
         norm_rew = env.get_normalized_score(reward_mean)
         norm_std = env.get_normalized_score(reward_mean + reward_std)
         norm_std -= norm_rew
-        return 100*norm_rew, 100*norm_std
+
+        eval_dict = {
+            "eval/scores_mean": 100*norm_rew,
+            "eval/scores_std": 100*norm_std,
+        }
+
+        if any([s in HP['env']['name'] for s in ['halfcheetah', 'hopper', 'walker2d']]):
+            return_thres = get_mujoco_ret_thres(HP['env']['name'])
+            sparse_reward_list = (reward_list > return_thres)
+            eval_dict['eval/success_rate_mean'] = 100*np.mean(sparse_reward_list)
+            eval_dict['eval/success_rate_std'] = 100*np.std(sparse_reward_list)
+
+        return eval_dict
     
     
     target_entropy = HP['learner']['target_entropy']
@@ -143,10 +186,10 @@ def main():
         HP['preprocess']['normalize_obs'],
         HP['preprocess']['normalize_rew'],
         HP['preprocess']['rew_scale'],
-        logger,
+        # logger,
         eval_policy_fn,
     )
-    norm_rew, norm_std = offline_learner.learn(
+    offline_learner.learn(
         data_batch, 
         HP['learner']['batch_size'], 
         HP['learner']['epoch'], 

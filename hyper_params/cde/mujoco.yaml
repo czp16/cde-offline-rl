@@ -11,7 +11,7 @@ learner:
     writer_dir: "exp/log"
     model_dir: "exp/model"
 
-    policy_extract_mode: 'info_proj' # ['info_proj', 'weighted_BC']
+    policy_extract_mode: 'weighted_BC' # ['info_proj', 'weighted_BC']
     e_value_type: "adv" # ["q", "adv"]
     e_value_loss_mode: 'mse' # ["mse", "minimax"]
     IS_ratio_normalize: true
@@ -42,10 +42,10 @@ preprocess:
     normalize_obs: true
     normalize_rew: true 
     rew_scale: 0.1
-    traj_weight_temp: 0.1
+    traj_weight_temp: null # 0.1
 
 DICE:
-    alpha_f_div: 0.01
+    alpha_f_div: 0.1
     calibrate_dist_v: false
     calibrate_dist_policy: false
     merge_timeout_to_terminal: false

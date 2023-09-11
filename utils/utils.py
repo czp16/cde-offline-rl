@@ -9,6 +9,9 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True, traj
     """
     env = gym.make(env_name)
     dataset = env.get_dataset()
+    if any([s in env_name for s in ['halfcheetah', 'hopper', 'walker2d']]): # use sparse rewards for mujoco
+        dataset = get_sparse_mujoco_dataset(dataset, env_name)
+        dataset['rewards'] = dataset['sparse_rewards']
     N = dataset['rewards'].shape[0]
 
     use_timeouts = ('timeouts' in dataset)
@@ -151,6 +154,33 @@ def get_return_range(dataset):
     lengths.append(ep_len)      # but still keep track of number of steps
     assert sum(lengths) == len(dataset['rewards'])
     return min(returns), max(returns)
+
+def get_mujoco_ret_thres(env_name):
+    all_return_thres = {
+        'halfcheetah-medium-expert-v2': 10703.437232539058, 
+        'walker2d-medium-expert-v2': 4924.7614947631955, 
+        'hopper-medium-expert-v2': 3561.865650832653, 
+        'halfcheetah-medium-v2': 4909.088379695488, 
+        'walker2d-medium-v2': 3697.807839655783, 
+        'hopper-medium-v2': 1621.4686678946018,
+    }
+    return all_return_thres[env_name]
+
+
+def get_sparse_mujoco_dataset(dataset, env_name):
+    # pre-calculated
+    return_thres = get_mujoco_ret_thres(env_name)
+    
+    dataset['sparse_rewards'] = np.zeros_like(dataset['rewards'])
+    ep_ret = 0.0
+    for t in range(len(dataset['sparse_rewards'])):
+        ep_ret += dataset['rewards'][t]
+        if ep_ret > return_thres:
+            dataset['sparse_rewards'][t] = 1.0
+        if dataset['terminals'][t] or dataset['timeouts'][t]:
+            ep_ret = 0.0
+
+    return dataset
 
 # if __name__ == "__main__":
 #     N = 20

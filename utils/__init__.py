@@ -1,6 +1,6 @@
 from utils.batch import Batch
 from utils.network import Critic, NormalPolicy, MixtureNormalPolicy, TanhNormalPolicy, TanhMixtureNormalPolicy
-from utils.utils import dice_dataset, get_return_range
+from utils.utils import dice_dataset, get_return_range, get_mujoco_ret_thres
 from utils.misc import Config, to_tensor, to_numpy, set_seed
 
 __all__ = [
