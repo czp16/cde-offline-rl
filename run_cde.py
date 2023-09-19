@@ -19,11 +19,10 @@ def get_args(parser):
     parser.add_argument('--dataset_ratio', type=float, default=1.0)
     parser.add_argument('--hyperparams', type=str)
     parser.add_argument('--cudaid', type=int, default=-1)
-    parser.add_argument('--alpha_f_div', type=float, default=0.01)
+    parser.add_argument('--alpha_f_div', type=float, default=0.1)
     parser.add_argument('--num_repeat_actions', type=int, default=5)
     parser.add_argument('--zeta_mix_dist', type=float, default=0.9)
     parser.add_argument('--ood_eps', type=float, default=0.3)
-    parser.add_argument('--log_path_info', type=str, default='')
 
 
 
@@ -47,7 +46,6 @@ def main():
     dataset_dict = dice_dataset(
         HP['env']['name'], 
         HP['misc']['dataset_ratio'], 
-        traj_weight_temp=HP['preprocess']['traj_weight_temp'],
         # use_sparse_rew=HP['misc']['use_sparse_r'],
     )
     data_batch = Batch(**dataset_dict)
@@ -89,7 +87,7 @@ def main():
     e_optim = torch.optim.Adam(e_net.parameters(), lr=nn_lr, weight_decay=HP['network']['e_net_l2_regularize'])
 
     wandb.init(
-        project="CDE_ablation",
+        project="CDE",
         entity="czp16",
         name=f"{HP['env']['name']}",
         config={
@@ -97,12 +95,10 @@ def main():
             "seed": HP['misc']['seed'],
             "dataset_ratio": HP['misc']['dataset_ratio'],
             "alpha_f_div": HP['DICE']['alpha_f_div'],
-            "traj_weight": HP['preprocess']['traj_weight_temp'] if HP['preprocess']['traj_weight_temp'] is not None else -1,
-            "mix_data_policy": HP['DICE']['mix_data_policy'],
             "tanh_squash": HP['network']['use_tanh_squash'],
             "zeta": HP['DICE']['zeta_mix_dist'],
             "ood_eps": HP['DICE']['ood_eps'],
-            "numood": HP['DICE']['mix_data_policy'],
+            "numood": HP['DICE']['num_repeat_actions'],
         }
     )
 
@@ -163,9 +159,6 @@ def main():
     offline_learner = CDELearner(
         HP['learner']['gamma'], 
         HP['DICE']['alpha_f_div'],
-        HP['DICE']['calibrate_dist_v'],
-        HP['DICE']['calibrate_dist_policy'],
-        HP['DICE']['merge_timeout_to_terminal'],
         policy, policy_optim,
         data_policy, data_policy_optim,
         v_net, v_optim, 
@@ -182,7 +175,6 @@ def main():
         target_entropy,
         device,
         HP['learner']['policy_extract_mode'],
-        HP['learner']['e_value_loss_mode'],
         HP['preprocess']['normalize_obs'],
         HP['preprocess']['normalize_rew'],
         HP['preprocess']['rew_scale'],

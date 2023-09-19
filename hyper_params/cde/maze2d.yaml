@@ -13,7 +13,6 @@ learner:
 
     policy_extract_mode: 'info_proj' # ['info_proj', 'weighted_BC']
     e_value_type: "adv" # ["q", "adv"]
-    e_value_loss_mode: 'mse' # ["mse", "minimax"]
     IS_ratio_normalize: true
     policy_entropy_reg: true
     data_policy_entropy_reg: false
@@ -42,13 +41,9 @@ preprocess:
     normalize_obs: true
     normalize_rew: true 
     rew_scale: 0.1
-    traj_weight_temp: null
 
 DICE:
-    alpha_f_div: 0.001 # 0.01 for maze2d-large
-    calibrate_dist_v: false
-    calibrate_dist_policy: false
-    merge_timeout_to_terminal: false
+    alpha_f_div: 0.001 # for maze2d-large 0.01 is better, but we report the scores of 0.001
 
     num_repeat_actions: 5
     zeta_mix_dist: 0.9

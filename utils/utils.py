@@ -3,7 +3,7 @@ import gym
 import d4rl
 
 
-def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True, traj_weight_temp=None):
+def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
     """
     trajectory rewighting is for behavior policy learning
     """
@@ -109,33 +109,46 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True, traj
         'is_init': is_init_,
     }
 
-    def softmax(x):
-        y = np.exp(x - np.max(x))
-        return y / np.sum(y)
+    # def softmax(x):
+    #     y = np.exp(x - np.max(x))
+    #     return y / np.sum(y)
 
-    if traj_weight_temp is not None:
-        """
-        Reweight trajectory for behavior policy training, will not influence other parts.
-            Reweight based on the scores G normalized by d4rl, $ G\in [0,1] $,
-            then the new weight is $\propto \frac{\exp(G)/temp}{\sum_i \exp(G_i)/temp} $.
-            See more details in Eq.(10) in https://openreview.net/pdf?id=OhUAblg27z 
-        """
+    # if traj_weight_temp is not None:
+    #     """
+    #     Reweight trajectory for behavior policy training, will not influence other parts.
+    #         Reweight based on the scores G normalized by d4rl, $ G\in [0,1] $,
+    #         then the new weight is $\propto \frac{\exp(G)/temp}{\sum_i \exp(G_i)/temp} $.
+    #         See more details in Eq.(10) in https://openreview.net/pdf?id=OhUAblg27z 
+    #     """
         
-        returns = []
-        weights = np.zeros_like(reward_)
-        init_idx = np.where(is_init_)[0]
-        begin_idx, end_idx = init_idx, np.append(init_idx[1:], len(reward_))
-        for b, e in zip(begin_idx, end_idx):
-            returns.append(np.sum(reward_[b:e]))
-        returns = np.array(returns)
-        norm_score = env.get_normalized_score(returns)
-        norm_score = np.clip(norm_score, 0.0, 1.0)
-        traj_weight = softmax(norm_score / traj_weight_temp)
-        for b, e, w in zip(begin_idx, end_idx, traj_weight):
-            weights[b:e] = w
-        weights = weights / np.sum(weights) * len(reward_)
+    #     returns = []
+    #     weights = np.zeros_like(reward_)
+    #     init_idx = np.where(is_init_)[0]
+    #     begin_idx, end_idx = init_idx, np.append(init_idx[1:], len(reward_))
+    #     for b, e in zip(begin_idx, end_idx):
+    #         returns.append(np.sum(reward_[b:e]))
+    #     returns = np.array(returns)
+    #     returns = np.clip(returns, 0.0, 1.0)
+    #     traj_weight = softmax(returns / traj_weight_temp)
+    #     for b, e, w in zip(begin_idx, end_idx, traj_weight):
+    #         weights[b:e] = w
+    #     weights = weights / np.sum(weights) * len(reward_)
 
-        dice_ds['weight'] = weights
+    #     dice_ds['weight'] = weights
+
+    returns = []
+    is_optimals = np.zeros_like(reward_)
+    init_idx = np.where(is_init_)[0]
+    begin_idx, end_idx = init_idx, np.append(init_idx[1:], len(reward_))
+    for b, e in zip(begin_idx, end_idx):
+        returns.append(np.sum(reward_[b:e]))
+    returns = np.array(returns)
+    for b, e, ret in zip(begin_idx, end_idx, returns):
+        is_optimals[b:e] = float(ret >=1.0) # is optimal if succeed
+    is_optimals += 1e-6 # in case that all states are not optimal
+    is_optimals = is_optimals / np.sum(is_optimals) * len(is_optimals)
+
+    dice_ds['is_optimal'] = is_optimals
 
     return dice_ds
 

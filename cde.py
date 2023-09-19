@@ -50,9 +50,6 @@ class CDELearner:
             self, 
             gamma,
             alpha,
-            calibrate_dist_v,
-            calibrate_dist_policy,
-            merge_timeout_to_terminal,
 
             policy,
             policy_optim,
@@ -77,7 +74,6 @@ class CDELearner:
             device=None,
 
             policy_extract_mode='info_proj',
-            e_value_loss_mode='minimax',
             normalize_obs=True,
             normalize_rew=True,
             rew_scale=1.0,
@@ -87,11 +83,6 @@ class CDELearner:
 
         self._gamma = gamma
         self._alpha = alpha
-        # `calibrate` means we multiply each transition with \gamma^t, 
-        # where t is the timestep when transition appears. 
-        self.calibrate_dist_v = calibrate_dist_v
-        self.calibrate_dist_policy = calibrate_dist_policy
-        self._merge_timeout_to_terminal = merge_timeout_to_terminal
 
         self.policy = policy
         self.policy_optim = policy_optim
@@ -114,7 +105,7 @@ class CDELearner:
         self._lambda_v = torch.tensor(0.0, device=device, requires_grad=True)
         self._lambda_e = torch.tensor(0.0, device=device, requires_grad=True)
 
-        if self.IS_ratio_normalize: # the constraint: E_D[w(s,a)] = 1, from GenDICE (https://openreview.net/forum?id=HkxlcnVFwB)
+        if self.IS_ratio_normalize: # the constraint: E_D[w(s,a)] = 1
             self._lambda_v_optim = torch.optim.Adam([self._lambda_v], 3e-4)
             self._lambda_e_optim = torch.optim.Adam([self._lambda_e], 3e-4)
         self.device = device
@@ -130,7 +121,6 @@ class CDELearner:
             self.data_ent_coef_optim = torch.optim.Adam([self.log_data_ent_coef], 3e-4)
             
         self.policy_extract_mode = policy_extract_mode
-        self.e_value_loss_mode = e_value_loss_mode
         self.normalize_obs = normalize_obs
         self.normalize_rew = normalize_rew
         self.rew_scale = rew_scale
@@ -180,11 +170,8 @@ class CDELearner:
                     adv_e = self.e_network(b.obs, b.act)
                 elif self.e_value_type == "q":
                     adv_e = self.e_network(b.obs, b.act) - v_s.detach()
-                adv_e_over_alpha = (adv_e - self._lambda_e) / self._alpha
+                adv_e_over_alpha = (adv_e - self._lambda_v) / self._alpha
                 w_e = self.r_fn(adv_e_over_alpha)
-                f_w_e = self.g_fn(adv_e_over_alpha)
-                if np.isnan(f_w_e.mean().item()):
-                    raise RuntimeError("Not converge when minimizing v. Try larger alpha.")
 
                 Df = f_w_sa.mean().item() # divergence between distributions of policy & dataset
                 if np.isnan(Df):
@@ -196,12 +183,7 @@ class CDELearner:
 
                 # 1. v loss, lambda_v_loss
                 v_loss = w_sa*(adv_sa-self._lambda_v.detach()) - self._alpha*f_w_sa
-                if self.calibrate_dist_v:
-                    v_loss = torch.pow(self._gamma, b.timestep) * v_loss
-                    v_loss = v_loss + (v_s * b.is_init)
-                    v_loss = v_loss.mean()
-                else:
-                    v_loss = v_loss.mean() + (1-self._gamma)*v_init.mean()
+                v_loss = v_loss.mean() + (1-self._gamma)*v_init.mean()
                 
                 if self.IS_ratio_normalize:
                     lambda_v_loss = w_sa.detach()*(adv_sa.detach()-self._lambda_v) + self._lambda_v
@@ -221,49 +203,39 @@ class CDELearner:
 
 
                 # 2. e_loss, lambda_e_loss
-                if self.e_value_loss_mode == "mse":
-                    e_loss = F.mse_loss(adv_e, adv_sa.detach())
-                    if 0.0 < self.zeta_mix_dist < 1.0:
-                        ood_act = torch.empty(
-                            (self.num_repeat_actions, *b.act.shape), device=self.device
-                        ).uniform_(-1.0, 1.0)
+                e_loss = F.mse_loss(adv_e, adv_sa.detach())
+                if 0.0 < self.zeta_mix_dist < 1.0:
+                    ood_act = torch.empty(
+                        (self.num_repeat_actions, *b.act.shape), device=self.device
+                    ).uniform_(-1.0, 1.0)
 
-                        e_ood = self.get_ood_e(b, ood_act)
-                        if self.e_value_type == "adv":
-                            adv_ood = e_ood
-                        elif self.e_value_type == "q":
-                            adv_ood = e_ood - v_s.detach()
-                        
-                        ood_loss = adv_ood - self._lambda_e.detach() - self._alpha * self.f_prime_fn_np(self.ood_eps)
-                        ood_loss = torch.square(torch.relu(ood_loss)).mean() # relu: only add loss when A > alpha * f'(\tilde{eps})
+                    e_ood = self.get_ood_e(b, ood_act)
+                    if self.e_value_type == "adv":
+                        adv_ood = e_ood
+                    elif self.e_value_type == "q":
+                        adv_ood = e_ood - v_s.detach()
+                    
+                    ood_loss = adv_ood - self._lambda_v.detach() - self._alpha * self.f_prime_fn_np(self.ood_eps)
+                    ood_loss = torch.square(torch.relu(ood_loss)).mean() # relu: only add loss when A > alpha * f'(\tilde{eps})
 
-                        e_loss = self.zeta_mix_dist * e_loss + (1-self.zeta_mix_dist) * ood_loss
+                    e_loss = self.zeta_mix_dist * e_loss + (1-self.zeta_mix_dist) * ood_loss
 
-                        e_ood_loss_list.append(ood_loss.item())
-
-                elif self.e_value_loss_mode == "minimax":
-                    # w, f(w) are calculated by estimated e_network
-                    e_loss = -(w_e * (adv_sa - self._lambda_e).detach() - self._alpha * f_w_e)
-                    e_loss = e_loss.mean()
-                else:
-                    raise NotImplementedError(
-                        f'The Q-value loss type `{self.e_value_loss_mode}` is not available.'
-                    )
+                    e_ood_loss_list.append(ood_loss.item())
                 
                 
-                if self.IS_ratio_normalize:
-                    w_ood = self.r_fn((adv_ood - self._lambda_e)/ self._alpha).detach().mean()
-                    lambda_e_loss = -(self.zeta_mix_dist * w_e.detach().mean() + (1-self.zeta_mix_dist) * w_ood)*self._lambda_e + self._lambda_e
-                    lambda_e_loss = lambda_e_loss.mean()
+                # if self.IS_ratio_normalize:
+                #     w_ood = self.r_fn((adv_ood - self._lambda_e)/ self._alpha).detach().mean()
+                #     lambda_e_loss = -(self.zeta_mix_dist * w_e.detach().mean() + (1-self.zeta_mix_dist) * w_ood)*self._lambda_e + self._lambda_e
+                #     lambda_e_loss = lambda_e_loss.mean()
 
                 self.e_optim.zero_grad()
                 e_loss.backward()
                 self.e_optim.step()
 
-                if self.IS_ratio_normalize:
-                    self._lambda_e_optim.zero_grad()
-                    lambda_e_loss.backward()
-                    self._lambda_e_optim.step()
+                # if self.IS_ratio_normalize:
+                #     self._lambda_e_optim.zero_grad()
+                #     lambda_e_loss.backward()
+                #     self._lambda_e_optim.step()
 
                 
                 # 3. data_policy loss, simple BC with entropy regularization
@@ -276,9 +248,9 @@ class CDELearner:
                         assert dp_ood_log_p.shape == (self.num_repeat_actions, batch_size, 1)
                         dp_ood_log_p = dp_ood_log_p.mean(0)
                         data_policy_loss = self.zeta_mix_dist * dp_log_p + (1 - self.zeta_mix_dist) * dp_ood_log_p
-                        data_policy_loss = - (data_policy_loss * b.weight).mean()
+                        data_policy_loss = - data_policy_loss.mean()
                     else:
-                        data_policy_loss = - (dp_log_p * b.weight).mean()
+                        data_policy_loss = - dp_log_p.mean()
 
                     _dp_log_py, _ = self.data_policy.log_prob(dp_dist, _y, _x)
                     data_policy_entropy = - _dp_log_py.mean()
@@ -314,13 +286,11 @@ class CDELearner:
                         policy_loss = - (w_e.detach() * log_p).mean()
                     
                     elif self.policy_extract_mode == 'info_proj':
-                        # `_adv_sa` is different from `adv_sa`, it's based on sampled actions
                         if self.e_value_type == "adv":
-                            _adv_sa = self.e_network(b.obs, _act)
+                            sampled_adv_sa = self.e_network(b.obs, _act)
                         elif self.e_value_type == "q":
-                            _adv_sa = self.e_network(b.obs, _act) - v_s.detach()
-                        _adv_over_alpha = (_adv_sa-self._lambda_e.detach())/self._alpha
-                        _log_we = self.log_r_fn(_adv_over_alpha)
+                            sampled_adv_sa = self.e_network(b.obs, _act) - v_s.detach()
+                        _log_we = self.log_r_fn((sampled_adv_sa-self._lambda_v.detach())/self._alpha)
                         
                         with torch.no_grad():
                             data_dist, _, _ = self.data_policy(b.obs)
@@ -334,9 +304,7 @@ class CDELearner:
                             kl = _log_px - _data_log_px
                         # kl = D.kl_divergence(dist, data_dist)
 
-                        policy_loss = - (_log_we - kl)
-                        if self.calibrate_dist_policy:
-                            policy_loss = torch.pow(self._gamma, b.timestep) * policy_loss
+                        policy_loss = - b.is_optimal * (_log_we - kl)
                         policy_loss = policy_loss.mean()
 
                         policy_kl_list.append(kl.mean().item())
@@ -376,12 +344,10 @@ class CDELearner:
                 'loss/td_error': np.mean(TD_error_list),
                 'alpha': self._alpha,
             }
-            if self.e_value_loss_mode == "mse":
-                loss_dict[f'loss/{self.e_value_type}_loss_mse'] = np.mean(e_loss_list)
+            
+            loss_dict[f'loss/{self.e_value_type}_loss_mse'] = np.mean(e_loss_list)
+            if 0 < self.zeta_mix_dist < 1.0:
                 loss_dict[f'loss/{self.e_value_type}_ood_loss_mse'] = np.mean(e_ood_loss_list)
-            else:
-                loss_dict[f'loss/{self.e_value_type}_loss_minimax'] = np.mean(e_loss_list)
-
 
             if self.IS_ratio_normalize:
                 loss_dict['lambda_v'] = self._lambda_v.item()
@@ -402,19 +368,19 @@ class CDELearner:
                 eval_dict = self.eval_policy_fn()
                 loss_dict.update(**eval_dict)
 
-            if episode >= 20:
-                _obs = batch.obs[:1000]
-                _act = batch.act[:1000]
-                v_obs = to_numpy(self.v_network(_obs).squeeze())
-                e_obs_act = to_numpy(self.e_network(_obs, _act).squeeze())
+            # if episode >= 0:
+            #     _obs = batch.obs[999999:1000998]
+            #     _act = batch.act[999999:1000998]
+            #     v_obs = to_numpy(self.v_network(_obs).squeeze())
+            #     e_obs_act = to_numpy(self.e_network(_obs, _act).squeeze())
                 
-                import matplotlib.pyplot as plt
-                plt.figure(figsize=(8,4))
-                plt.subplot(1,2,1)
-                plt.plot(np.arange(1000), v_obs)
-                plt.subplot(1,2,2)
-                plt.plot(np.arange(1000), e_obs_act)
-                plt.savefig('tmp.png')
+            #     import matplotlib.pyplot as plt
+            #     plt.figure(figsize=(8,4))
+            #     plt.subplot(1,2,1)
+            #     plt.plot(np.arange(1000-1), v_obs)
+            #     plt.subplot(1,2,2)
+            #     plt.plot(np.arange(1000-1), e_obs_act)
+            #     plt.savefig('tmp.png')
 
             wandb.log(loss_dict, step=episode)
             
@@ -459,9 +425,6 @@ class CDELearner:
             batch.rew = (batch.rew - rew_mean) / (rew_std + 1e-7)
         if self.rew_scale:
             batch.rew = self.rew_scale * batch.rew
-        if self.calibrate_dist_v or self.calibrate_dist_policy:
-            timestep = self._get_timestep(batch)
-            batch.update(timestep=timestep)
 
         # if self._merge_timeout_to_terminal:
         #     batch.terminal = np.logical_or(batch.terminal, batch.timeout).astype(batch.terminal.dtype)
@@ -473,13 +436,11 @@ class CDELearner:
         batch.rew = to_tensor(batch.rew).unsqueeze(-1)
         batch.terminal = to_tensor(batch.terminal).unsqueeze(-1)
         batch.is_init = to_tensor(batch.is_init).unsqueeze(-1)
-        if hasattr(batch, "weight"):
-            batch.weight = to_tensor(batch.weight).unsqueeze(-1)
+        if hasattr(batch, "is_optimal"):
+            batch.is_optimal = to_tensor(batch.is_optimal).unsqueeze(-1)
         else:
-            batch.weight = torch.ones_like(batch.rew)
+            batch.is_optimal = torch.ones_like(batch.rew)
 
-        if self.calibrate_dist_v or self.calibrate_dist_policy:
-            batch.timestep = to_tensor(batch.timestep).unsqueeze(-1)
         return batch
 
 
