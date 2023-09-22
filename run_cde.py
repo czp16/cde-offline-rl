@@ -19,10 +19,10 @@ def get_args(parser):
     parser.add_argument('--dataset_ratio', type=float, default=1.0)
     parser.add_argument('--hyperparams', type=str)
     parser.add_argument('--cudaid', type=int, default=-1)
-    parser.add_argument('--alpha_f_div', type=float, default=0.1)
-    parser.add_argument('--num_repeat_actions', type=int, default=5)
-    parser.add_argument('--zeta_mix_dist', type=float, default=0.9)
-    parser.add_argument('--ood_eps', type=float, default=0.3)
+    # parser.add_argument('--alpha_f_div', type=float, default=0.1)
+    # parser.add_argument('--num_repeat_actions', type=int, default=5)
+    # parser.add_argument('--zeta_mix_dist', type=float, default=0.9)
+    # parser.add_argument('--ood_eps', type=float, default=0.3)
 
 
 
@@ -95,10 +95,9 @@ def main():
             "seed": HP['misc']['seed'],
             "dataset_ratio": HP['misc']['dataset_ratio'],
             "alpha_f_div": HP['DICE']['alpha_f_div'],
-            "tanh_squash": HP['network']['use_tanh_squash'],
             "zeta": HP['DICE']['zeta_mix_dist'],
-            "ood_eps": HP['DICE']['ood_eps'],
-            "numood": HP['DICE']['num_repeat_actions'],
+            # "ood_eps": HP['DICE']['ood_eps'],
+            # "numood": HP['DICE']['num_repeat_actions'],
         }
     )
 
@@ -106,11 +105,6 @@ def main():
     log_dir = os.path.join(HP['learner']['writer_dir'], f"{HP['env']['name']}/")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir, 0o777)
-    # if cfg.args.log_path_info == '':
-    #     log_path = f"cde_seed{HP['misc']['seed']}_{HP['misc']['dataset_ratio']}_{time.strftime('%d-%m-%Y_%H-%M-%S')}"
-    # else:
-    #     log_path = f"cde_{cfg.args.log_path_info}_seed{HP['misc']['seed']}_{time.strftime('%d-%m-%Y_%H-%M-%S')}"
-    # logger = SummaryWriter(os.path.join(log_dir, log_path))
     
     # evaluation function
     def eval_policy_fn():

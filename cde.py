@@ -102,12 +102,12 @@ class CDELearner:
         self.e_value_type = e_value_type
         self.IS_ratio_normalize = IS_ratio_normalize
         
-        self._lambda_v = torch.tensor(0.0, device=device, requires_grad=True)
-        self._lambda_e = torch.tensor(0.0, device=device, requires_grad=True)
+        self._eta_v = torch.tensor(0.0, device=device, requires_grad=True)
+        self._eta_e = torch.tensor(0.0, device=device, requires_grad=True)
 
         if self.IS_ratio_normalize: # the constraint: E_D[w(s,a)] = 1
-            self._lambda_v_optim = torch.optim.Adam([self._lambda_v], 3e-4)
-            self._lambda_e_optim = torch.optim.Adam([self._lambda_e], 3e-4)
+            self._eta_v_optim = torch.optim.Adam([self._eta_v], 3e-4)
+            self._eta_e_optim = torch.optim.Adam([self._eta_e], 3e-4)
         self.device = device
         
         self.policy_ent_reg = policy_ent_reg
@@ -161,7 +161,7 @@ class CDELearner:
                 
                 # adv_sa and following variables are computated from `v_network`
                 adv_sa = b.rew + self._gamma * (1.0 - b.terminal) * v_s_next - v_s
-                adv_over_alpha = (adv_sa - self._lambda_v) / self._alpha
+                adv_over_alpha = (adv_sa - self._eta_v) / self._alpha
                 w_sa = self.r_fn(adv_over_alpha)
                 f_w_sa = self.g_fn(adv_over_alpha)
 
@@ -170,7 +170,7 @@ class CDELearner:
                     adv_e = self.e_network(b.obs, b.act)
                 elif self.e_value_type == "q":
                     adv_e = self.e_network(b.obs, b.act) - v_s.detach()
-                adv_e_over_alpha = (adv_e - self._lambda_v) / self._alpha
+                adv_e_over_alpha = (adv_e - self._eta_e) / self._alpha
                 w_e = self.r_fn(adv_e_over_alpha)
 
                 Df = f_w_sa.mean().item() # divergence between distributions of policy & dataset
@@ -181,28 +181,28 @@ class CDELearner:
                 td_error = adv_sa.pow(2).mean()
                 TD_error_list.append(td_error.item())
 
-                # 1. v loss, lambda_v_loss
-                v_loss = w_sa*(adv_sa-self._lambda_v.detach()) - self._alpha*f_w_sa
+                # 1. v loss, eta_v_loss
+                v_loss = w_sa*(adv_sa-self._eta_v.detach()) - self._alpha*f_w_sa
                 v_loss = v_loss.mean() + (1-self._gamma)*v_init.mean()
                 
                 if self.IS_ratio_normalize:
-                    lambda_v_loss = w_sa.detach()*(adv_sa.detach()-self._lambda_v) + self._lambda_v
-                    lambda_v_loss = lambda_v_loss.mean()
+                    eta_v_loss = w_sa.detach()*(adv_sa.detach()-self._eta_v) + self._eta_v
+                    eta_v_loss = eta_v_loss.mean()
 
                 self.v_optim.zero_grad()
                 v_loss.backward() # retain_graph=True
                 self.v_optim.step()
 
                 if self.IS_ratio_normalize:
-                    self._lambda_v_optim.zero_grad()
-                    lambda_v_loss.backward()
-                    self._lambda_v_optim.step()
+                    self._eta_v_optim.zero_grad()
+                    eta_v_loss.backward()
+                    self._eta_v_optim.step()
 
                 v_loss_list.append(v_loss.item())
-                # lambda_v_loss_list.append(lambda_v_loss.item())
+                # eta_v_loss_list.append(eta_v_loss.item())
 
 
-                # 2. e_loss, lambda_e_loss
+                # 2. e_loss, eta_e_loss
                 e_loss = F.mse_loss(adv_e, adv_sa.detach())
                 if 0.0 < self.zeta_mix_dist < 1.0:
                     ood_act = torch.empty(
@@ -215,7 +215,7 @@ class CDELearner:
                     elif self.e_value_type == "q":
                         adv_ood = e_ood - v_s.detach()
                     
-                    ood_loss = adv_ood - self._lambda_v.detach() - self._alpha * self.f_prime_fn_np(self.ood_eps)
+                    ood_loss = adv_ood - self._eta_e.detach() - self._alpha * self.f_prime_fn_np(self.ood_eps)
                     ood_loss = torch.square(torch.relu(ood_loss)).mean() # relu: only add loss when A > alpha * f'(\tilde{eps})
 
                     e_loss = self.zeta_mix_dist * e_loss + (1-self.zeta_mix_dist) * ood_loss
@@ -223,19 +223,18 @@ class CDELearner:
                     e_ood_loss_list.append(ood_loss.item())
                 
                 
-                # if self.IS_ratio_normalize:
-                #     w_ood = self.r_fn((adv_ood - self._lambda_e)/ self._alpha).detach().mean()
-                #     lambda_e_loss = -(self.zeta_mix_dist * w_e.detach().mean() + (1-self.zeta_mix_dist) * w_ood)*self._lambda_e + self._lambda_e
-                #     lambda_e_loss = lambda_e_loss.mean()
+                if self.IS_ratio_normalize:
+                    eta_e_loss = w_e.detach()*(adv_sa.detach()-self._eta_e) + self._eta_e
+                    eta_e_loss = eta_e_loss.mean()
 
                 self.e_optim.zero_grad()
                 e_loss.backward()
                 self.e_optim.step()
 
-                # if self.IS_ratio_normalize:
-                #     self._lambda_e_optim.zero_grad()
-                #     lambda_e_loss.backward()
-                #     self._lambda_e_optim.step()
+                if self.IS_ratio_normalize:
+                    self._eta_e_optim.zero_grad()
+                    eta_e_loss.backward()
+                    self._eta_e_optim.step()
 
                 
                 # 3. data_policy loss, simple BC with entropy regularization
@@ -290,7 +289,7 @@ class CDELearner:
                             sampled_adv_sa = self.e_network(b.obs, _act)
                         elif self.e_value_type == "q":
                             sampled_adv_sa = self.e_network(b.obs, _act) - v_s.detach()
-                        _log_we = self.log_r_fn((sampled_adv_sa-self._lambda_v.detach())/self._alpha)
+                        _log_we = self.log_r_fn((sampled_adv_sa-self._eta_e.detach())/self._alpha)
                         
                         with torch.no_grad():
                             data_dist, _, _ = self.data_policy(b.obs)
@@ -350,8 +349,8 @@ class CDELearner:
                 loss_dict[f'loss/{self.e_value_type}_ood_loss_mse'] = np.mean(e_ood_loss_list)
 
             if self.IS_ratio_normalize:
-                loss_dict['lambda_v'] = self._lambda_v.item()
-                loss_dict['lambda_e'] = self._lambda_e.item()
+                loss_dict['eta_v'] = self._eta_v.item()
+                loss_dict['eta_e'] = self._eta_e.item()
             if self.policy_extract_mode == 'info_proj':
                 loss_dict['loss/data_policy'] = np.mean(data_policy_loss_list)
                 loss_dict['loss/data_policy_entropy'] = np.mean(data_policy_entropy_list)
@@ -367,20 +366,6 @@ class CDELearner:
             if episode >= warmup_episodes and self.eval_policy_fn:
                 eval_dict = self.eval_policy_fn()
                 loss_dict.update(**eval_dict)
-
-            # if episode >= 0:
-            #     _obs = batch.obs[999999:1000998]
-            #     _act = batch.act[999999:1000998]
-            #     v_obs = to_numpy(self.v_network(_obs).squeeze())
-            #     e_obs_act = to_numpy(self.e_network(_obs, _act).squeeze())
-                
-            #     import matplotlib.pyplot as plt
-            #     plt.figure(figsize=(8,4))
-            #     plt.subplot(1,2,1)
-            #     plt.plot(np.arange(1000-1), v_obs)
-            #     plt.subplot(1,2,2)
-            #     plt.plot(np.arange(1000-1), e_obs_act)
-            #     plt.savefig('tmp.png')
 
             wandb.log(loss_dict, step=episode)
             
@@ -425,10 +410,6 @@ class CDELearner:
             batch.rew = (batch.rew - rew_mean) / (rew_std + 1e-7)
         if self.rew_scale:
             batch.rew = self.rew_scale * batch.rew
-
-        # if self._merge_timeout_to_terminal:
-        #     batch.terminal = np.logical_or(batch.terminal, batch.timeout).astype(batch.terminal.dtype)
-
         
         batch.obs = to_tensor(batch.obs)
         batch.act = to_tensor(batch.act)
