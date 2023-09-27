@@ -215,6 +215,15 @@ class TanhMixtureNormalPolicy(nn.Module):
         action = torch.tanh(pretanh_action)
 
         return gmm, action, pretanh_action
+    
+    def get_action_std(self, s):
+        s = to_tensor(s)
+        s = s.view(s.shape[0], -1)
+        h = self.model(s)
+        sigma = torch.clamp(self.sigma(h), LOG_SIG_MIN, LOG_SIG_MAX)
+        sigma = torch.exp(sigma)
+        sigma = sigma.view(-1, self.n_comp, self.a_dim).mean(1)
+        return sigma
 
     @staticmethod
     def log_prob(dist, action=None, pretanh_action=None):

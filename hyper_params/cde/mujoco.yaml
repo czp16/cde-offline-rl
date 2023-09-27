@@ -1,8 +1,8 @@
 learner:
     gamma: 0.99
 
-    epoch: 200
-    warmup_epoch: 40 #start training policy after warmup
+    epoch: 500
+    warmup_epoch: 100 #start training policy after warmup
     batch_size: 512
     n_step_per_episode: 1000
 

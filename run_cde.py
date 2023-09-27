@@ -19,10 +19,6 @@ def get_args(parser):
     parser.add_argument('--dataset_ratio', type=float, default=1.0)
     parser.add_argument('--hyperparams', type=str)
     parser.add_argument('--cudaid', type=int, default=-1)
-    # parser.add_argument('--alpha_f_div', type=float, default=0.1)
-    # parser.add_argument('--num_repeat_actions', type=int, default=5)
-    # parser.add_argument('--zeta_mix_dist', type=float, default=0.9)
-    # parser.add_argument('--ood_eps', type=float, default=0.3)
 
 
 
@@ -88,7 +84,7 @@ def main():
 
     wandb.init(
         project="CDE",
-        entity="czp16",
+        entity="Your wandb ID",
         name=f"{HP['env']['name']}",
         config={
             "env_name": HP['env']['name'],
@@ -96,8 +92,6 @@ def main():
             "dataset_ratio": HP['misc']['dataset_ratio'],
             "alpha_f_div": HP['DICE']['alpha_f_div'],
             "zeta": HP['DICE']['zeta_mix_dist'],
-            # "ood_eps": HP['DICE']['ood_eps'],
-            # "numood": HP['DICE']['num_repeat_actions'],
         }
     )
 

@@ -4,9 +4,7 @@ import d4rl
 
 
 def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
-    """
-    trajectory rewighting is for behavior policy learning
-    """
+    
     env = gym.make(env_name)
     dataset = env.get_dataset()
     if any([s in env_name for s in ['halfcheetah', 'hopper', 'walker2d']]): # use sparse rewards for mujoco
@@ -58,21 +56,15 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
     reward_ = []
     done_ = []
     is_init_ = []
+    is_optimals = np.array([])
 
     episode_step = 0
-    last_is_done = True
-
     for i in range(N-1):
-        if last_is_done:
-            episode_step = 0
-        episode_step += 1
-
         obs = dataset['observations'][i].astype(np.float32)
         new_obs = dataset['observations'][i+1].astype(np.float32)
         action = dataset['actions'][i].astype(np.float32)
         reward = dataset['rewards'][i].astype(np.float32)
         done_bool = bool(dataset['terminals'][i])
-        is_init = last_is_done
 
         if use_timeouts:
             final_timestep = dataset['timeouts'][i]
@@ -80,18 +72,24 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
             final_timestep = (episode_step == env._max_episode_steps)
         if (not done_bool) and (skip_timeout_transition and final_timestep):
             # Skip this transition and don't apply terminals on the last step of an episode
-            last_is_done = True
+            is_optimals = np.append(is_optimals, (reward > 0.0) * np.ones(episode_step))
+            episode_step = 0
             continue
 
-        last_is_done = done_bool
+        is_init_.append(int(episode_step==0))
 
         obs_.append(obs)
         next_obs_.append(new_obs)
         action_.append(action)
         reward_.append(reward)
         done_.append(done_bool)
-        is_init_.append(is_init)
         episode_step += 1
+
+        if done_bool or final_timestep:
+            is_optimals = np.append(is_optimals, (reward > 0.0) * np.ones(episode_step))
+            episode_step = 0
+
+    is_optimals = np.append(is_optimals, (reward > 0.0) * np.ones(episode_step))
     
     obs_ = np.array(obs_)
     action_ = np.array(action_)
@@ -100,6 +98,10 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
     done_ = np.array(done_)
     is_init_ = np.array(is_init_)
 
+    if is_optimals.sum() < 10:
+        is_optimals += 1e-6 # in case that all states are not optimal
+        is_optimals = is_optimals / np.sum(is_optimals) * len(is_optimals)
+
     dice_ds =  {
         'obs': obs_,
         'act': action_,
@@ -107,48 +109,11 @@ def dice_dataset(env_name, dataset_ratio=1.0, skip_timeout_transition=True):
         'rew': reward_,
         'terminal': done_,
         'is_init': is_init_,
+        'is_optimal': is_optimals,
     }
 
-    # def softmax(x):
-    #     y = np.exp(x - np.max(x))
-    #     return y / np.sum(y)
-
-    # if traj_weight_temp is not None:
-    #     """
-    #     Reweight trajectory for behavior policy training, will not influence other parts.
-    #         Reweight based on the scores G normalized by d4rl, $ G\in [0,1] $,
-    #         then the new weight is $\propto \frac{\exp(G)/temp}{\sum_i \exp(G_i)/temp} $.
-    #         See more details in Eq.(10) in https://openreview.net/pdf?id=OhUAblg27z 
-    #     """
-        
-    #     returns = []
-    #     weights = np.zeros_like(reward_)
-    #     init_idx = np.where(is_init_)[0]
-    #     begin_idx, end_idx = init_idx, np.append(init_idx[1:], len(reward_))
-    #     for b, e in zip(begin_idx, end_idx):
-    #         returns.append(np.sum(reward_[b:e]))
-    #     returns = np.array(returns)
-    #     returns = np.clip(returns, 0.0, 1.0)
-    #     traj_weight = softmax(returns / traj_weight_temp)
-    #     for b, e, w in zip(begin_idx, end_idx, traj_weight):
-    #         weights[b:e] = w
-    #     weights = weights / np.sum(weights) * len(reward_)
-
-    #     dice_ds['weight'] = weights
-
-    returns = []
-    is_optimals = np.zeros_like(reward_)
-    init_idx = np.where(is_init_)[0]
-    begin_idx, end_idx = init_idx, np.append(init_idx[1:], len(reward_))
-    for b, e in zip(begin_idx, end_idx):
-        returns.append(np.sum(reward_[b:e]))
-    returns = np.array(returns)
-    for b, e, ret in zip(begin_idx, end_idx, returns):
-        is_optimals[b:e] = float(ret >=1.0) # is optimal if succeed
-    is_optimals += 1e-6 # in case that all states are not optimal
-    is_optimals = is_optimals / np.sum(is_optimals) * len(is_optimals)
-
-    dice_ds['is_optimal'] = is_optimals
+    # dice_ds['is_optimal'] = is_optimals
+    assert dice_ds['is_optimal'].size == dice_ds['rew'].size, f"{dice_ds['is_optimal'].size} v.s. {dice_ds['rew'].size}"
 
     return dice_ds
 
@@ -195,30 +160,16 @@ def get_sparse_mujoco_dataset(dataset, env_name):
 
     return dataset
 
-# if __name__ == "__main__":
-#     N = 20
-#     obs = np.zeros(N)
-#     act = np.zeros(N)
-#     rew = np.arange(N)
-#     terminals = np.zeros(N)
-#     terminals[np.random.randint(0,N,3)] = 1.0
-#     timeouts = np.zeros(N)
-#     timeouts[np.random.randint(0,N,3)] = 1.0
-    
-#     ds = {
-#         'observations': obs,
-#         'actions': act,
-#         'rewards': rew,
-#         'terminals': terminals,
-#         'timeouts': timeouts,
-#     }
-
-#     print("="*10)
-#     for k,v in ds.items():
-#         print(k, v)
-
-#     ds_with_init = dataset_with_init(ds, N)
-
-#     print("="*10)
-#     for k,v in ds_with_init.items():
-#         print(k, v)
+if __name__ == "__main__":
+    env_names = [
+        "halfcheetah-medium-expert-v2", 
+        "walker2d-medium-expert-v2", 
+        "hopper-medium-expert-v2", 
+        "halfcheetah-medium-v2", 
+        "walker2d-medium-v2", 
+        "hopper-medium-v2",
+    ]
+    for env_name in env_names:
+        print(env_name)
+        ds = dice_dataset(env_name)
+        print('len', ds['is_optimal'].size, 'n isinit', ds['is_init'].sum())

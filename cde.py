@@ -161,7 +161,7 @@ class CDELearner:
                 
                 # adv_sa and following variables are computated from `v_network`
                 adv_sa = b.rew + self._gamma * (1.0 - b.terminal) * v_s_next - v_s
-                adv_over_alpha = (adv_sa - self._eta_v) / self._alpha
+                adv_over_alpha = (adv_sa - self._eta_v.detach()) / self._alpha
                 w_sa = self.r_fn(adv_over_alpha)
                 f_w_sa = self.g_fn(adv_over_alpha)
 
@@ -170,7 +170,7 @@ class CDELearner:
                     adv_e = self.e_network(b.obs, b.act)
                 elif self.e_value_type == "q":
                     adv_e = self.e_network(b.obs, b.act) - v_s.detach()
-                adv_e_over_alpha = (adv_e - self._eta_e) / self._alpha
+                adv_e_over_alpha = (adv_e - self._eta_e.detach()) / self._alpha
                 w_e = self.r_fn(adv_e_over_alpha)
 
                 Df = f_w_sa.mean().item() # divergence between distributions of policy & dataset
@@ -182,7 +182,7 @@ class CDELearner:
                 TD_error_list.append(td_error.item())
 
                 # 1. v loss, eta_v_loss
-                v_loss = w_sa*(adv_sa-self._eta_v.detach()) - self._alpha*f_w_sa
+                v_loss = w_sa*(adv_sa-self._eta_v.detach()) - self._alpha*f_w_sa + self._eta_v.detach()
                 v_loss = v_loss.mean() + (1-self._gamma)*v_init.mean()
                 
                 if self.IS_ratio_normalize:
@@ -205,9 +205,7 @@ class CDELearner:
                 # 2. e_loss, eta_e_loss
                 e_loss = F.mse_loss(adv_e, adv_sa.detach())
                 if 0.0 < self.zeta_mix_dist < 1.0:
-                    ood_act = torch.empty(
-                        (self.num_repeat_actions, *b.act.shape), device=self.device
-                    ).uniform_(-1.0, 1.0)
+                    ood_act = self.get_ood_a(b)
 
                     e_ood = self.get_ood_e(b, ood_act)
                     if self.e_value_type == "adv":
@@ -383,15 +381,28 @@ class CDELearner:
         return e_ood
 
 
-    def _get_timestep(self, batch):
-        timestep = np.zeros_like(batch.rew)
-        t = 0
-        for _ in range(len(timestep)):
-            timestep[_] = t
-            t += 1
-            if batch.terminal[_]:
-                t = 0
-        return timestep
+    def get_ood_a(self, batch):
+        delta_a = 0.0
+        if self.policy_extract_mode == "info_proj" and hasattr(self.data_policy, "get_action_std"):
+            with torch.no_grad():
+                a_std = self.data_policy.get_action_std(batch.obs)
+                a_std = torch.clamp_max(a_std, 0.1)
+            delta_a = a_std.unsqueeze(0)
+        
+        tmp_batch_act = batch.act.unsqueeze(0)
+        ood_a = torch.empty(
+            (self.num_repeat_actions, *batch.act.shape), device=self.device
+        ).uniform_(-1.0, 1.0)
+
+        _cnt = 0
+        while torch.any(torch.abs(ood_a - tmp_batch_act) < delta_a) and _cnt < 10:
+            new_ood_a = torch.empty(
+                (self.num_repeat_actions, *batch.act.shape), device=self.device
+            ).uniform_(-1.0, 1.0)
+            ood_a = torch.where(torch.abs(ood_a - tmp_batch_act) < delta_a, new_ood_a, ood_a)
+            _cnt += 1
+        
+        return ood_a
     
 
     def preprocess(self, batch):
